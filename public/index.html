@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Translator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+
+    h1 { font-size: 24px; margin-bottom: 4px; }
+
+    .subtitle {
+      color: #64748b;
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+
+    #history {
+      width: 100%;
+      max-width: 560px;
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .card {
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+
+    .lang-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-right: 6px;
+    }
+
+    .pt-badge { background: #15803d33; color: #4ade80; }
+    .en-badge { background: #1d4ed833; color: #60a5fa; }
+
+    .pt-text { color: #94a3b8; font-size: 14px; }
+    .en-text {
+      color: #f1f5f9;
+      font-size: 17px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .en-text:hover { text-decoration: underline; }
+
+    .row { display: flex; align-items: baseline; margin-top: 6px; }
+    .row:first-child { margin-top: 0; }
+
+    .controls { display: flex; gap: 10px; }
+
+    button {
+      padding: 12px 28px;
+      border-radius: 50px;
+      border: 2px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 15px;
+      cursor: pointer;
+    }
+
+    button.active {
+      border-color: #dc2626;
+      background: #7f1d1d44;
+      color: #fca5a5;
+    }
+
+    .placeholder {
+      text-align: center;
+      color: #475569;
+      margin-top: 80px;
+      font-size: 15px;
+    }
+
+    .partial { opacity: 0.4; }
+  </style>
+</head>
+<body>
+  <h1>🇧🇷 → 🇺🇸 Live Translator</h1>
+  <p class="subtitle">Fale em português, receba em inglês</p>
+
+  <div id="history">
+    <div class="placeholder" id="placeholder">
+      🎙️<br>Suas traduções aparecerão aqui
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="micBtn" onclick="toggleMic()">🎙️ Iniciar</button>
+    <button onclick="clearHistory()">Limpar</button>
+  </div>
+
+  <script>
+    // ============ ESTADO ============
+    // Essas variáveis controlam o app inteiro.
+    // No n8n seria como as variáveis que você passa entre nós.
+    let recognition = null;
+    let isListening = false;
+
+    // ============ ELEMENTOS ============
+    // Pega referências dos elementos HTML pra manipular depois.
+    // É como "selecionar o nó" antes de configurar.
+    const historyEl = document.getElementById('history');
+    const micBtn = document.getElementById('micBtn');
+    const placeholder = document.getElementById('placeholder');
+
+    // ============ MICROFONE ============
+    // Web Speech API — é uma API nativa do navegador (grátis, sem key).
+    // Alternativas seriam: Deepgram (pago, mais preciso),
+    // Whisper da OpenAI (pago, roda no servidor), ou AssemblyAI.
+    // Pra MVP, a API nativa é a melhor: zero custo e funciona bem.
+    function toggleMic() {
+      isListening ? stopListening() : startListening();
+    }
+
+    function startListening() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return alert('Use o Chrome para Speech Recognition.');
+
+      recognition = new SR();
+      recognition.lang = 'pt-BR';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) {
+            // Frase completa — manda pro servidor traduzir
+            const text = e.results[i][0].transcript.trim();
+            if (text) translate(text);
+            removePartial();
+          } else {
+            // Ainda falando — mostra o texto parcial
+            showPartial(e.results[i][0].transcript);
+          }
+        }
+      };
+
+      // Se o recognition parar sozinho (timeout do Chrome), reinicia
+      recognition.onend = () => {
+        if (isListening) recognition.start();
+      };
+
+      recognition.start();
+      isListening = true;
+      micBtn.textContent = '⏹ Parar';
+      micBtn.classList.add('active');
+    }
+
+    function stopListening() {
+      if (recognition) {
+        isListening = false;
+        recognition.stop();
+        recognition = null;
+      }
+      micBtn.textContent = '🎙️ Iniciar';
+      micBtn.classList.remove('active');
+    }
+
+    // ============ TRADUÇÃO ============
+    // Aqui o frontend chama SEU servidor — não a OpenAI diretamente.
+    // O caminho é: navegador → localhost:3000/api/translate → OpenAI
+    // A API key nunca aparece aqui. Seguro.
+    async function translate(text) {
+      placeholder.style.display = 'none';
+
+      // Cria o card visual na tela
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="row">
+          <span class="lang-badge pt-badge">PT</span>
+          <span class="pt-text">${text}</span>
+        </div>
+        <div class="row">
+          <span class="lang-badge en-badge">EN</span>
+          <span class="en-text">Traduzindo...</span>
+        </div>
+      `;
+      historyEl.appendChild(card);
+      card.scrollIntoView({ behavior: 'smooth' });
+
+      try {
+        // Chama o SEU servidor (server.js)
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        const enEl = card.querySelector('.en-text');
+        enEl.textContent = data.translation;
+
+        // Clica na tradução pra copiar
+        enEl.onclick = () => navigator.clipboard.writeText(data.translation);
+      } catch {
+        card.querySelector('.en-text').textContent = '⚠ Erro na tradução';
+      }
+    }
+
+    // ============ TEXTO PARCIAL ============
+    // Mostra o que você tá falando antes de terminar a frase
+    function showPartial(text) {
+      removePartial();
+      placeholder.style.display = 'none';
+      const el = document.createElement('div');
+      el.className = 'card partial';
+      el.id = 'partial';
+      el.innerHTML = `
+        <div class="row">
+          <span class="lang-badge pt-badge">PT</span>
+          <span class="pt-text">${text}…</span>
+        </div>
+      `;
+      historyEl.appendChild(el);
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function removePartial() {
+      document.getElementById('partial')?.remove();
+    }
+
+    function clearHistory() {
+      historyEl.innerHTML = `
+        <div class="placeholder" id="placeholder">
+          🎙️<br>Suas traduções aparecerão aqui
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
